@@ -1,15 +1,24 @@
 import torch.nn as nn
 from .decoder import Decoder
 from .msff import MSFF
+from .asff import ASFF
+
 
 class MemSeg(nn.Module):
-    def __init__(self, memory_bank, feature_extractor):
+    def __init__(self, memory_bank, feature_extractor, feature_channels, use_asff=False):
         super(MemSeg, self).__init__()
 
         self.memory_bank = memory_bank
         self.feature_extractor = feature_extractor
-        self.msff = MSFF()
-        self.decoder = Decoder()
+
+        f_in_channels = feature_channels[0]
+        if use_asff:
+            self.fusion = ASFF()
+            fusion_channels = [f_in_channels, 128, 128, 128]
+        else:
+            self.fusion = MSFF()
+            fusion_channels = [f_in_channels, 64, 128, 256]
+        self.decoder = Decoder(fusion_channels=fusion_channels)
 
     def forward(self, inputs):
         # extract features
@@ -21,13 +30,13 @@ class MemSeg(nn.Module):
         # extract concatenated information(CI)
         concat_features = self.memory_bank.select(features = f_ii)
 
-        # Multi-scale Feature Fusion(MSFF) Module
-        msff_outputs = self.msff(features = concat_features)
+        # Feature Fusion Module (MSFF or ASFF)
+        fusion_outputs = self.fusion(features = concat_features)
 
         # decoder
         predicted_mask = self.decoder(
             encoder_output  = f_out,
-            concat_features = [f_in] + msff_outputs
+            concat_features = [f_in] + fusion_outputs
         )
 
         return predicted_mask

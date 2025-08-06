@@ -48,7 +48,10 @@ class MemSegDataset(Dataset):
         # load image file list
         self.datadir = datadir
         self.target = target
-        self.file_list = glob(os.path.join(self.datadir, self.target, 'train/*/*' if is_train else 'test/*/*'))
+        pattern = os.path.join(self.datadir, self.target, 'train', 'good', '*') if is_train else os.path.join(self.datadir, self.target, 'test', '*', '*')
+        print(f"[DEBUG] glob pattern: {pattern}")
+        self.file_list = glob(pattern)
+        print(f"[DEBUG] Found {len(self.file_list)} files.")
         
         # synthetic anomaly
         if self.is_train and not self.to_memory:
@@ -278,5 +281,5 @@ class MemSegDataset(Dataset):
         
     def __len__(self):
         return len(self.file_list)
-    
+
 

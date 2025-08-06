@@ -19,6 +19,7 @@ from scheduler import CosineAnnealingWarmupRestarts
 _logger = logging.getLogger('train')
 
 
+
 def run(cfg):
 
     # setting seed and device
@@ -55,6 +56,8 @@ def run(cfg):
         bg_threshold           = cfg.DATASET.bg_threshold,
         bg_reverse             = cfg.DATASET.bg_reverse
     )
+    print(f"Trainset size: {len(trainset)}")
+    print(f"Trainset sample files: {getattr(trainset, 'files', 'N/A')}")
 
     memoryset = create_dataset(
         datadir   = cfg.DATASET.datadir,
@@ -111,10 +114,23 @@ def run(cfg):
     torch.save(memory_bank, os.path.join(savedir, f'memory_bank.pt'))
     _logger.info('Update {} normal samples in memory bank'.format(cfg.MEMORYBANK.nb_memory_sample))
 
+
     # build MemSeg
+    use_asff = False
+    if hasattr(cfg.MODEL, 'use_asff'):
+        use_asff = cfg.MODEL.use_asff
+
+    # feature_extractor의 출력 채널 리스트 추출
+    with torch.no_grad():
+        dummy = torch.zeros(1, 3, cfg.DATASET.imagesize, cfg.DATASET.imagesize).to(device)
+        features = feature_extractor(dummy)
+        feature_channels = [f.shape[1] for f in features]
+
     model = MemSeg(
         memory_bank       = memory_bank,
-        feature_extractor = feature_extractor
+        feature_extractor = feature_extractor,
+        feature_channels  = feature_channels,
+        use_asff          = use_asff
     ).to(device)
 
     # Set training
@@ -160,19 +176,29 @@ def run(cfg):
 
 
 
+
 if __name__=='__main__':
+    import sys
+    from omegaconf import DictConfig
     args = OmegaConf.from_cli()
     # load default config
     cfg = OmegaConf.load(args.configs)
     del args['configs']
-    
+
+    # add use_asff argument if not present
+    if 'use_asff' not in args:
+        args['use_asff'] = False
+    if 'MODEL' not in cfg:
+        cfg.MODEL = {}
+    cfg.MODEL['use_asff'] = args['use_asff']
+
     # merge config with new keys
     cfg = OmegaConf.merge(cfg, args)
-    
+
     # target cfg
     target_cfg = OmegaConf.load(cfg.DATASET.anomaly_mask_info)
     cfg.DATASET = OmegaConf.merge(cfg.DATASET, target_cfg[cfg.DATASET.target])
-    
+
     print(OmegaConf.to_yaml(cfg))
 
     run(cfg)
