@@ -25,8 +25,8 @@ class h_swish(nn.Module):
 class CoordAtt(nn.Module):
     def __init__(self, inp, oup, reduction=32):
         super(CoordAtt, self).__init__()
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+        # self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        # self.pool_w = nn.AdaptiveAvgPool2d((1, None))
 
         mip = max(8, inp // reduction)
 
@@ -40,22 +40,61 @@ class CoordAtt(nn.Module):
 
     def forward(self, x):
         identity = x
+        n, c, h, w = x.size()
+        x_h, x_w = None, None
+
+        # ✅ 축 평균으로 명확히 표현 (항상 NCHW)
+        if torch.onnx.is_in_onnx_export():
+            # ONNX export 시엔 ReduceMean이 생성됨
+            x_h = x.mean(dim=3, keepdim=True)        # (N,C,H,1)  ← W축 평균
+            x_w = x.mean(dim=2, keepdim=True)        # (N,C,1,W)  ← H축 평균
+            # 2) concat 없이 각 분기에 동일한 1x1 conv → BN → act 적용
+            y_h = self.act(self.bn1(self.conv1(x_h)))  # (N,mip,H,1)
+            y_w = self.act(self.bn1(self.conv1(x_w)))  # (N,mip,1,W)
+
+            # 3) 축별 주의맵 산출
+            a_h = torch.sigmoid(self.conv_h(y_h))      # (N,oup,H,1)
+            a_w = torch.sigmoid(self.conv_w(y_w))      # (N,oup,1,W)
+
+            out = x * a_h * a_w                        # 브로드캐스트 곱 (N,C,H,W)
+            return out
+        else:
+            x_h = self.pool_h(x)
+            x_w = self.pool_w(x).permute(0, 1, 3, 2)
+
+            y = torch.cat([x_h, x_w], dim=2)
+            y = self.conv1(y)
+            y = self.bn1(y)
+            y = self.act(y) 
+            
+            x_h, x_w = torch.split(y, [h, w], dim=2)
+            x_w = x_w.permute(0, 1, 3, 2)
+
+            a_h = self.conv_h(x_h).sigmoid()
+            a_w = self.conv_w(x_w).sigmoid()
+
+            out = identity * a_w * a_h
+
+            return out
+
+    # def forward(self, x):
+    #     identity = x
         
-        n,c,h,w = x.size()
-        x_h = self.pool_h(x)
-        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+    #     n,c,h,w = x.size()
+    #     x_h = self.pool_h(x)
+    #     x_w = self.pool_w(x).permute(0, 1, 3, 2)
 
-        y = torch.cat([x_h, x_w], dim=2)
-        y = self.conv1(y)
-        y = self.bn1(y)
-        y = self.act(y) 
+    #     y = torch.cat([x_h, x_w], dim=2)
+    #     y = self.conv1(y)
+    #     y = self.bn1(y)
+    #     y = self.act(y) 
         
-        x_h, x_w = torch.split(y, [h, w], dim=2)
-        x_w = x_w.permute(0, 1, 3, 2)
+    #     x_h, x_w = torch.split(y, [h, w], dim=2)
+    #     x_w = x_w.permute(0, 1, 3, 2)
 
-        a_h = self.conv_h(x_h).sigmoid()
-        a_w = self.conv_w(x_w).sigmoid()
+    #     a_h = self.conv_h(x_h).sigmoid()
+    #     a_w = self.conv_w(x_w).sigmoid()
 
-        out = identity * a_w * a_h
+    #     out = identity * a_w * a_h
 
-        return out
+    #     return out

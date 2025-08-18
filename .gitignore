@@ -143,3 +143,11 @@ cython_debug/
 # results
 *.pt
 wandb/
+
+backup_savedmodel/
+datasets/
+litmus/
+export_onnx/
+furiosa_enf/
+
+*.onnx
