@@ -103,17 +103,30 @@ def run(cfg):
         for p in feature_extractor[l].parameters():
             p.requires_grad = False
 
+    # # build memory bank
+    # memory_bank = MemoryBank(
+    #     normal_dataset   = memoryset,
+    #     nb_memory_sample = cfg.MEMORYBANK.nb_memory_sample,
+    #     device           = device
+    # )
+    # ## update normal samples and save
+    # memory_bank.update(feature_extractor=feature_extractor)
+    # torch.save(memory_bank, os.path.join(savedir, f'memory_bank.pt'))
+    # _logger.info('Update {} normal samples in memory bank'.format(cfg.MEMORYBANK.nb_memory_sample))
+
     # build memory bank
     memory_bank = MemoryBank(
         normal_dataset   = memoryset,
         nb_memory_sample = cfg.MEMORYBANK.nb_memory_sample,
-        device           = device
+        device           = device,
+        selector         = getattr(cfg.MEMORYBANK, 'selector', 'random'),
+        kmeans_k         = getattr(cfg.MEMORYBANK, 'kmeans_k', None),
     )
     ## update normal samples and save
     memory_bank.update(feature_extractor=feature_extractor)
     torch.save(memory_bank, os.path.join(savedir, f'memory_bank.pt'))
-    _logger.info('Update {} normal samples in memory bank'.format(cfg.MEMORYBANK.nb_memory_sample))
-
+    _logger.info('Update {} normal samples in memory bank (selector: {})'
+                 .format(cfg.MEMORYBANK.nb_memory_sample, getattr(cfg.MEMORYBANK, 'selector', 'random')))
 
     # build MemSeg
     use_asff = False
@@ -197,6 +210,21 @@ if __name__=='__main__':
 
     # target cfg
     target_cfg = OmegaConf.load(cfg.DATASET.anomaly_mask_info)
+
+    # 가드 추가
+    if 'target' not in cfg.DATASET or cfg.DATASET.target is None:
+        raise ValueError(
+            "DATASET.target 이 설정되어 있지 않습니다. "
+            "예: DATASET.target=50_T3_150"
+        )
+
+    available = list(target_cfg.keys()) if hasattr(target_cfg, 'keys') else []
+    if cfg.DATASET.target not in available:
+        raise KeyError(
+            f"'{cfg.DATASET.target}' 키를 {cfg.DATASET.anomaly_mask_info}에서 찾지 못했습니다. "
+            f"사용 가능: {available}"
+        )
+
     cfg.DATASET = OmegaConf.merge(cfg.DATASET, target_cfg[cfg.DATASET.target])
 
     print(OmegaConf.to_yaml(cfg))

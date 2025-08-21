@@ -30,10 +30,18 @@ class AverageMeter:
         self.count += n
         self.avg = self.sum / self.count
 
+def _safe_json_dump(obj, path: str) -> None:
+    """원자적 파일 쓰기 (부분파일 방지)."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2)
+    os.replace(tmp, path)
 
 
 def training(model, trainloader, validloader, criterion, optimizer, scheduler, num_training_steps: int = 1000, loss_weights: List[float] = [0.6, 0.4], 
-             log_interval: int = 1, eval_interval: int = 1, savedir: str = None, use_wandb: bool = False, device: str ='cpu') -> dict:   
+             log_interval: int = 1, eval_interval: int = 1, savedir: str = None, use_wandb: bool = False, device: str ='cpu',
+             save_metrics_json: bool = True, run_meta: dict = None) -> dict:   
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -120,6 +128,40 @@ def training(model, trainloader, validloader, criterion, optimizer, scheduler, n
                     device       = device
                 )
                 model.train()
+                # === [METRICS JSON] step별/최신 저장 ===
+                if save_metrics_json and savedir is not None:
+                    now = int(time.time())
+                    try:
+                        metrics_record = {
+                            "step": int(step) + 1,     # 보기 좋은 1-based
+                            "timestamp": now,
+                            "device": str(device),
+                            # 누적 평균 손실 스냅샷(이 변수명이 다르면 프로젝트 변수명에 맞춰 바꿔주세요)
+                            "train_loss_avg": float(losses_m.avg),
+                            "train_l1_loss_avg": float(l1_losses_m.avg),
+                            "train_focal_loss_avg": float(focal_losses_m.avg),
+                            # 평가 메트릭 그대로 포함 (예: AUROC-image, AUROC-pixel, AUPRO-pixel)
+                            **{k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
+                            for k, v in eval_metrics.items()}
+                        }
+                    except NameError:
+                        # 만약 위 손실 변수명이 다르면 손실 항목 없이라도 저장되도록 방어
+                        metrics_record = {
+                            "step": int(step) + 1,
+                            "timestamp": now,
+                            "device": str(device),
+                            **{k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
+                            for k, v in eval_metrics.items()}
+                        }
+
+                    if run_meta:
+                        metrics_record["meta"] = run_meta
+
+                    # step 스냅샷 파일
+                    _safe_json_dump(metrics_record, os.path.join(savedir, f"metrics_step{int(step)+1:06d}.json"))
+                    # 최신 스냅샷(덮어쓰기)
+                    _safe_json_dump(metrics_record, os.path.join(savedir, "metrics_latest.json"))
+                # === [END METRICS JSON] ===
 
                 eval_log = dict([(f'eval_{k}', v) for k, v in eval_metrics.items()])
 
@@ -140,6 +182,26 @@ def training(model, trainloader, validloader, criterion, optimizer, scheduler, n
                     _logger.info('Best Score {0:.3%} to {1:.3%}'.format(best_score, np.mean(list(eval_metrics.values()))))
 
                     best_score = np.mean(list(eval_metrics.values()))
+                    
+                    # --- [METRICS JSON] best 저장 ---
+                    if save_metrics_json and savedir is not None:
+                        now = int(time.time())
+                        # 위에서 만든 metrics_record가 있다면 재사용, 없으면 새로 구성
+                        try:
+                            best_record = dict(metrics_record)
+                        except NameError:
+                            best_record = {
+                                "step": int(step) + 1,
+                                "timestamp": now,
+                                "device": str(device),
+                                **{k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
+                                for k, v in eval_metrics.items()}
+                            }
+                            if run_meta:
+                                best_record["meta"] = run_meta
+
+                        _safe_json_dump(best_record, os.path.join(savedir, "metrics_best.json"))
+                    # --- [END METRICS JSON] ---
 
             # scheduler
             if scheduler:

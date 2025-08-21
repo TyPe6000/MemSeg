@@ -149,5 +149,7 @@ datasets/
 litmus/
 export_onnx/
 furiosa_enf/
+runs/
+summary/
 
 *.onnx
