@@ -1,4 +1,6 @@
-
+# models/asff.py
+# Adaptive Spatial Feature Fusion (ASFF) module for MemSeg
+# Reference: https://arxiv.org/abs/1911.09516
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
