@@ -1,3 +1,7 @@
+# train.py
+# v1 : cloned source from memseg
+# v2 : 2025-08-21, adding more metrics json dump
+# v3 : 2025-09-01, GPU native AUROC (binary) patch
 import time
 import json
 import os 
@@ -12,6 +16,46 @@ from sklearn.metrics import roc_auc_score
 from metrics import compute_pro, trapezoid
 
 _logger = logging.getLogger('train')
+
+# patch v3: ---- GPU-native AUROC (binary) ----
+import torch
+
+def torch_binary_auroc(y_true: torch.Tensor, y_score: torch.Tensor) -> torch.Tensor:
+    """
+    y_true: (N,) in {0,1}
+    y_score: (N,) in [0,1]
+    returns: scalar tensor (AUC)
+    """
+    y_true = y_true.reshape(-1).to(dtype=torch.float32)
+    y_score = y_score.reshape(-1).to(dtype=torch.float32)
+
+    P = y_true.sum()
+    N = y_true.numel() - P
+    # 양/음 샘플이 한쪽으로만 존재하면 정의 불가 → NaN 반환(원하면 0.5 등으로 처리)
+    if P == 0 or N == 0:
+        return torch.nan
+
+    # 점수 내림차순 정렬
+    scores, idx = torch.sort(y_score, descending=True)
+    labels = y_true[idx]
+
+    # 누적 TP/FP
+    tps = torch.cumsum(labels, dim=0)
+    fps = torch.cumsum(1.0 - labels, dim=0)
+
+    tpr = tps / P.clamp_min(1)
+    fpr = fps / N.clamp_min(1)
+
+    # 중복 점수 처리(고유 점수 경계에서만 샘플)
+    first = torch.ones(1, dtype=torch.bool, device=scores.device)
+    changes = torch.cat([first, scores[1:] != scores[:-1]])
+    tpr_u = torch.cat([tpr.new_zeros(1), tpr[changes]])
+    fpr_u = torch.cat([fpr.new_zeros(1), fpr[changes]])
+
+    # 사다리꼴 적분
+    auc = torch.trapz(tpr_u, fpr_u)
+    return auc
+# patch v3: ---- end ----
 
 class AverageMeter:
     """Computes and stores the average and current value"""
@@ -228,52 +272,106 @@ def training(model, trainloader, validloader, criterion, optimizer, scheduler, n
 
     
 
-        
+# patch v3: GPU-native AUROC (binary) ----
+
+# def evaluate(model, dataloader, device: str = 'cpu'):
+#     # targets and outputs
+#     image_targets = []
+#     image_masks = []
+#     anomaly_score = []
+#     anomaly_map = []
+
+#     model.eval()
+#     with torch.no_grad():
+#         for idx, (inputs, masks, targets) in enumerate(dataloader):
+#             inputs, masks, targets = inputs.to(device), masks.to(device), targets.to(device)
+            
+#             # predict
+#             outputs = model(inputs)
+#             outputs = F.softmax(outputs, dim=1)
+#             anomaly_score_i = torch.topk(torch.flatten(outputs[:,1,:], start_dim=1), 100)[0].mean(dim=1)
+
+#             # stack targets and outputs
+#             image_targets.extend(targets.cpu().tolist())
+#             image_masks.extend(masks.cpu().numpy())
+            
+#             anomaly_score.extend(anomaly_score_i.cpu().tolist())
+#             anomaly_map.extend(outputs[:,1,:].cpu().numpy())
+            
+#     # metrics    
+#     image_masks = np.array(image_masks)
+#     anomaly_map = np.array(anomaly_map)
+    
+#     auroc_image = roc_auc_score(image_targets, anomaly_score)
+#     auroc_pixel = roc_auc_score(image_masks.reshape(-1).astype(int), anomaly_map.reshape(-1))
+#     all_fprs, all_pros = compute_pro(
+#         anomaly_maps      = anomaly_map,
+#         ground_truth_maps = image_masks
+#     )
+#     aupro = trapezoid(all_fprs, all_pros)
+    
+#     metrics = {
+#         'AUROC-image':auroc_image,
+#         'AUROC-pixel':auroc_pixel,
+#         'AUPRO-pixel':aupro
+
+#     }
+
+#     _logger.info('TEST: AUROC-image: %.3f%% | AUROC-pixel: %.3f%% | AUPRO-pixel: %.3f%%' % 
+#                 (metrics['AUROC-image'], metrics['AUROC-pixel'], metrics['AUPRO-pixel']))
+
+
+#     return metrics
+
 def evaluate(model, dataloader, device: str = 'cpu'):
-    # targets and outputs
     image_targets = []
     image_masks = []
-    anomaly_score = []
-    anomaly_map = []
+    anomaly_scores = []
+    anomaly_maps = []
 
     model.eval()
     with torch.no_grad():
-        for idx, (inputs, masks, targets) in enumerate(dataloader):
-            inputs, masks, targets = inputs.to(device), masks.to(device), targets.to(device)
-            
-            # predict
-            outputs = model(inputs)
+        for inputs, masks, targets in dataloader:
+            inputs  = inputs.to(device)
+            masks   = masks.to(device)
+            targets = targets.to(device)
+
+            outputs = model(inputs)                 # [B,2,H,W]
             outputs = F.softmax(outputs, dim=1)
-            anomaly_score_i = torch.topk(torch.flatten(outputs[:,1,:], start_dim=1), 100)[0].mean(dim=1)
+            # 이미지 점수(top-k 평균)도 GPU에서 계산
+            probs1  = outputs[:, 1, ...]            # [B,H,W]
+            flat    = probs1.flatten(start_dim=1)    # [B, H*W]
+            k       = min(100, flat.shape[1])
+            score_i = torch.topk(flat, k=k, dim=1).values.mean(dim=1)
 
-            # stack targets and outputs
-            image_targets.extend(targets.cpu().tolist())
-            image_masks.extend(masks.cpu().numpy())
-            
-            anomaly_score.extend(anomaly_score_i.cpu().tolist())
-            anomaly_map.extend(outputs[:,1,:].cpu().numpy())
-            
-    # metrics    
-    image_masks = np.array(image_masks)
-    anomaly_map = np.array(anomaly_map)
-    
-    auroc_image = roc_auc_score(image_targets, anomaly_score)
-    auroc_pixel = roc_auc_score(image_masks.reshape(-1).astype(int), anomaly_map.reshape(-1))
-    all_fprs, all_pros = compute_pro(
-        anomaly_maps      = anomaly_map,
-        ground_truth_maps = image_masks
-    )
+            image_targets.append(targets.float())    # [B]
+            image_masks.append(masks.float())        # [B,H,W]
+            anomaly_scores.append(score_i)           # [B]
+            anomaly_maps.append(probs1)              # [B,H,W]
+
+    # ---- GPU-native AUROC (image-level) ----
+    y_img = torch.cat(image_targets, dim=0).to(device)     # [N]
+    s_img = torch.cat(anomaly_scores, dim=0).to(device)    # [N]
+    auroc_image = torch_binary_auroc(y_img, s_img).item()
+
+    # ---- GPU-native AUROC (pixel-level) ----
+    y_pix = torch.cat(image_masks, dim=0).reshape(-1).to(device)   # [N*H*W]
+    s_pix = torch.cat(anomaly_maps, dim=0).reshape(-1).to(device)  # [N*H*W]
+    auroc_pixel = torch_binary_auroc(y_pix, s_pix).item()
+
+    # ---- AUPRO는 당분간 CPU 유지 (compute_pro가 numpy 전제) ----
+    masks_np = torch.cat(image_masks, dim=0).cpu().numpy()         # [N,H,W]
+    maps_np  = torch.cat(anomaly_maps, dim=0).cpu().numpy()        # [N,H,W]
+    all_fprs, all_pros = compute_pro(anomaly_maps=maps_np, ground_truth_maps=masks_np)
     aupro = trapezoid(all_fprs, all_pros)
-    
-    metrics = {
-        'AUROC-image':auroc_image,
-        'AUROC-pixel':auroc_pixel,
-        'AUPRO-pixel':aupro
 
+    metrics = {
+        'AUROC-image': auroc_image,
+        'AUROC-pixel': auroc_pixel,
+        'AUPRO-pixel': aupro
     }
 
-    _logger.info('TEST: AUROC-image: %.3f%% | AUROC-pixel: %.3f%% | AUPRO-pixel: %.3f%%' % 
-                (metrics['AUROC-image'], metrics['AUROC-pixel'], metrics['AUPRO-pixel']))
-
-
+    _logger.info('TEST: AUROC-image: %.3f%% | AUROC-pixel: %.3f%% | AUPRO-pixel: %.3f%%' %
+                 (metrics['AUROC-image'], metrics['AUROC-pixel'], metrics['AUPRO-pixel']))
     return metrics
+# patch v3: ---- end ----

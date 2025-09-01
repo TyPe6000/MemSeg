@@ -1,4 +1,7 @@
+# focal_loss.py
 # https://github.com/mbsariyildiz/focal-loss.pytorch/blob/master/focalloss.py
+# v1 - clone from memseg
+# v2 - 2025.09.01, minor edit, minimalize CPU calculate
 
 import torch
 import torch.nn as nn
@@ -26,12 +29,17 @@ class FocalLoss(nn.Module):
 
         # add label smoothing
         num_class = input.shape[1]
-        idx = target.cpu().long()
+        # patch v2: minimalize CPU calculate
 
-        one_hot_key = torch.FloatTensor(target.size(0), num_class).zero_()
-        one_hot_key = one_hot_key.scatter_(1, idx, 1)
-        if one_hot_key.device != input.device:
-            one_hot_key = one_hot_key.to(input.device)
+        # idx = target.cpu().long()
+
+        # one_hot_key = torch.FloatTensor(target.size(0), num_class).zero_()
+        # one_hot_key = one_hot_key.scatter_(1, idx, 1)
+        # if one_hot_key.device != input.device:
+        #     one_hot_key = one_hot_key.to(input.device)
+        idx = target.to(dtype=torch.long, device=input.device)
+        one_hot_key = torch.zeros(target.size(0), num_class, device=input.device)
+        one_hot_key.scatter_(1, idx, 1)
 
         if self.smooth:
             one_hot_key = torch.clamp(

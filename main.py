@@ -158,6 +158,7 @@ def run(cfg):
         for p in feature_extractor[l].parameters():
             p.requires_grad = False
 
+    # patch
     # # build memory bank
     # memory_bank = MemoryBank(
     #     normal_dataset   = memoryset,
