@@ -146,6 +146,7 @@ wandb/
 
 backup_savedmodel/
 datasets/
+configs/
 litmus/
 export_onnx/
 furiosa_enf/

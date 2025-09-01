@@ -45,10 +45,27 @@ class MemSegDataset(Dataset):
         self.is_train = is_train 
         self.to_memory = to_memory
 
+        # # load image file list
+        # self.datadir = datadir
+        # self.target = target
+        # pattern = os.path.join(self.datadir, self.target, 'train', 'good', '*') if is_train else os.path.join(self.datadir, self.target, 'test', '*', '*')
+        # print(f"[DEBUG] glob pattern: {pattern}")
+        # self.file_list = glob(pattern)
+        # patch - 다권종 대응 확장 BEGIN
         # load image file list
         self.datadir = datadir
         self.target = target
-        pattern = os.path.join(self.datadir, self.target, 'train', 'good', '*') if is_train else os.path.join(self.datadir, self.target, 'test', '*', '*')
+
+        # --- resolve actual target directory (supports <datadir>/<target> and <datadir>/*/<target>) ---
+        self.target_dir = self._resolve_target_dir(self.datadir, self.target)
+
+        pattern = (
+            os.path.join(self.target_dir, 'train', 'good', '*')
+            if is_train else
+            os.path.join(self.target_dir, 'test', '*', '*')
+        )
+        print(f"[DEBUG] target_dir: {self.target_dir}")
+        # patch - 다권종 대응 확장 END
         print(f"[DEBUG] glob pattern: {pattern}")
         self.file_list = glob(pattern)
         print(f"[DEBUG] Found {len(self.file_list)} files.")
@@ -93,6 +110,46 @@ class MemSegDataset(Dataset):
 
         # sythetic anomaly switch
         self.anomaly_switch = False
+    
+    # patch - 다권종 대응 확장 BEGIN
+    def _resolve_target_dir(self, datadir: str, target: str) -> str:
+        """
+        Find the concrete directory that contains <target>, supporting:
+          - <datadir>/<target>
+          - <datadir>/*/<target>
+          - <datadir>/**/<target>  (fallback; recursive)
+        Raises a clear error if not found or ambiguous.
+        """
+        direct = os.path.join(datadir, target)
+        if os.path.isdir(direct):
+            return direct
+
+        # 1-level deep (e.g., <datadir>/<denom>/<target>)
+        one_level = glob(os.path.join(datadir, '*', target))
+        if len(one_level) == 1:
+            return one_level[0]
+        elif len(one_level) > 1:
+            raise RuntimeError(
+                f"Ambiguous target '{target}' under '{datadir}/*/{target}': {one_level}\n"
+                f"Please disambiguate (e.g., adjust DATASET.datadir or restructure)."
+            )
+
+        # Fallback: search recursively for robustness
+        deep = glob(os.path.join(datadir, '**', target), recursive=True)
+        deep = [d for d in deep if os.path.isdir(d)]
+        if len(deep) == 1:
+            return deep[0]
+        elif len(deep) == 0:
+            raise FileNotFoundError(
+                f"Target '{target}' not found under '{datadir}'. "
+                f"Expected '<datadir>/<target>' or '<datadir>/*/{target}'."
+            )
+        else:
+            raise RuntimeError(
+                f"Ambiguous target '{target}' under '{datadir}/**/{target}': {deep}\n"
+                f"Please disambiguate (e.g., adjust DATASET.datadir or restructure)."
+            )
+    # patch - 다권종 대응 확장 END
         
     def __getitem__(self, idx):
         
@@ -203,7 +260,7 @@ class MemSegDataset(Dataset):
         
         # generate binary mask of gray scale image
         _, target_background_mask = cv2.threshold(img_gray, self.bg_threshold, 255, cv2.THRESH_BINARY)
-        target_background_mask = target_background_mask.astype(np.bool).astype(np.int)
+        target_background_mask = target_background_mask.astype(np.bool_).astype(np.int_)
 
         # invert mask for foreground mask
         if self.bg_reverse:
