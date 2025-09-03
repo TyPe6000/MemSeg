@@ -1,7 +1,7 @@
 # train.py
 # v1 : cloned source from memseg
-# v2 : 2025-08-21, adding more metrics json dump
-# v3 : 2025-09-01, GPU native AUROC (binary) patch
+# v1.1 : 2025-08-21, adding more metrics json dump
+# v2 : 2025-09-01, GPU native AUROC (binary) patch (for train speed enhancement by reducing CPU usage)
 import time
 import json
 import os 
@@ -17,7 +17,7 @@ from metrics import compute_pro, trapezoid
 
 _logger = logging.getLogger('train')
 
-# patch v3: ---- GPU-native AUROC (binary) ----
+# patch v2: ---- GPU-native AUROC (binary) ----
 import torch
 
 def torch_binary_auroc(y_true: torch.Tensor, y_score: torch.Tensor) -> torch.Tensor:
@@ -55,7 +55,7 @@ def torch_binary_auroc(y_true: torch.Tensor, y_score: torch.Tensor) -> torch.Ten
     # 사다리꼴 적분
     auc = torch.trapz(tpr_u, fpr_u)
     return auc
-# patch v3: ---- end ----
+# patch v2: ---- end ----
 
 class AverageMeter:
     """Computes and stores the average and current value"""
@@ -172,6 +172,7 @@ def training(model, trainloader, validloader, criterion, optimizer, scheduler, n
                     device       = device
                 )
                 model.train()
+                # patch v1.1
                 # === [METRICS JSON] step별/최신 저장 ===
                 if save_metrics_json and savedir is not None:
                     now = int(time.time())
@@ -272,7 +273,7 @@ def training(model, trainloader, validloader, criterion, optimizer, scheduler, n
 
     
 
-# patch v3: GPU-native AUROC (binary) ----
+# patch v2: GPU-native AUROC (binary) ----
 
 # def evaluate(model, dataloader, device: str = 'cpu'):
 #     # targets and outputs
@@ -374,4 +375,4 @@ def evaluate(model, dataloader, device: str = 'cpu'):
     _logger.info('TEST: AUROC-image: %.3f%% | AUROC-pixel: %.3f%% | AUPRO-pixel: %.3f%%' %
                  (metrics['AUROC-image'], metrics['AUROC-pixel'], metrics['AUPRO-pixel']))
     return metrics
-# patch v3: ---- end ----
+# patch v2: ---- end ----
