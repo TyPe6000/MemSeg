@@ -1,6 +1,12 @@
-import torch
+# models/decoder.py
+# v1 - 2025-08-01, Forked from Memseg
+# v2 - 2025-08-05, modify to support ASFF and MSFF
+# v3 - 2025-09-03, debugging for shape mismatch
 import torch.nn as nn
-
+# patch v3 - debugging
+import torch
+import logging
+log = logging.getLogger("memseg.resize")
 
 class UpConvBlock(nn.Module):
     def __init__(self, in_channel, out_channel):
@@ -44,28 +50,61 @@ class Decoder(nn.Module):
         self.upconv2mask = UpConvBlock(up0_c + up0_c, up0_c)           # x_up0 + f0(conv) -> up0_c
 
         self.final_conv = nn.Conv2d(up0_c, final_out_channels, kernel_size=3, stride=1, padding=1)
+        # patch v3 - debugging
+        self.register_buffer("interp_f3_calls", torch.zeros(1, dtype=torch.long))
+        self.register_buffer("interp_f2_calls", torch.zeros(1, dtype=torch.long))
+        self.register_buffer("interp_f1_calls", torch.zeros(1, dtype=torch.long))
+        self.debug_shapes = False
+        log.info(f"Decoder initialized with encoder_out_channels={encoder_out_channels}, fusion_channels={fusion_channels}, decoder_channels={decoder_channels}, final_out_channels={final_out_channels}")
+        # patch v3 end - debugging
 
     def forward(self, encoder_output, concat_features):
         # concat_features = [level0, level1, level2, level3]
         f0, f1, f2, f3 = concat_features
         
-        # 512 x 8 x 8 -> 512 x 16 x 16
+        # # 512 x 8 x 8 -> 512 x 16 x 16
+        # x_up3 = self.upconv3(encoder_output)
+        # if x_up3.shape[-2:] != f3.shape[-2:]:
+        #     f3 = nn.functional.interpolate(f3, size=x_up3.shape[-2:], mode='bilinear', align_corners=False)
+        # x_up3 = torch.cat([x_up3, f3], dim=1)  
+
+        # # 512 x 16 x 16 -> 256 x 32 x 32
+        # x_up2 = self.upconv2(x_up3)
+        # if x_up2.shape[-2:] != f2.shape[-2:]:
+        #     f2 = nn.functional.interpolate(f2, size=x_up2.shape[-2:], mode='bilinear', align_corners=False)
+        # x_up2 = torch.cat([x_up2, f2], dim=1)  
+
+        # # 256 x 32 x 32 -> 128 x 64 x 64
+        # x_up1 = self.upconv1(x_up2)
+        # if x_up1.shape[-2:] != f1.shape[-2:]:
+        #     f1 = nn.functional.interpolate(f1, size=x_up1.shape[-2:], mode='bilinear', align_corners=False)
+        # x_up1 = torch.cat([x_up1, f1], dim=1)  
+
+        # patch v3 - debugging
+
         x_up3 = self.upconv3(encoder_output)
         if x_up3.shape[-2:] != f3.shape[-2:]:
+            self.interp_f3_calls += 1
+            if self.debug_shapes and self.interp_f3_calls.item() <= 20:
+                log.info(f"[Decoder] f3 fix {tuple(f3.shape[-2:])} -> {tuple(x_up3.shape[-2:])}")
             f3 = nn.functional.interpolate(f3, size=x_up3.shape[-2:], mode='bilinear', align_corners=False)
-        x_up3 = torch.cat([x_up3, f3], dim=1)  
+        x_up3 = torch.cat([x_up3, f3], dim=1)
 
-        # 512 x 16 x 16 -> 256 x 32 x 32
         x_up2 = self.upconv2(x_up3)
         if x_up2.shape[-2:] != f2.shape[-2:]:
+            self.interp_f2_calls += 1
+            if self.debug_shapes and self.interp_f2_calls.item() <= 20:
+                log.info(f"[Decoder] f2 fix {tuple(f2.shape[-2:])} -> {tuple(x_up2.shape[-2:])}")
             f2 = nn.functional.interpolate(f2, size=x_up2.shape[-2:], mode='bilinear', align_corners=False)
-        x_up2 = torch.cat([x_up2, f2], dim=1)  
+        x_up2 = torch.cat([x_up2, f2], dim=1)
 
-        # 256 x 32 x 32 -> 128 x 64 x 64
         x_up1 = self.upconv1(x_up2)
         if x_up1.shape[-2:] != f1.shape[-2:]:
+            self.interp_f1_calls += 1
+            if self.debug_shapes and self.interp_f1_calls.item() <= 20:
+                log.info(f"[Decoder] f1 fix {tuple(f1.shape[-2:])} -> {tuple(x_up1.shape[-2:])}")
             f1 = nn.functional.interpolate(f1, size=x_up1.shape[-2:], mode='bilinear', align_corners=False)
-        x_up1 = torch.cat([x_up1, f1], dim=1)  
+        x_up1 = torch.cat([x_up1, f1], dim=1)
 
         # 128 x 64 x 64 -> 96 x 128 x 128
         x_up0 = self.upconv0(x_up1)

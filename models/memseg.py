@@ -1,3 +1,7 @@
+# models/memseg.py
+# v1 - 2025-08-01, Forked from Memseg
+# v2 - 2025-08-05, add ASFF option
+# v3 - 2025-09-03, ASFF output channels resolution fix(expanded)
 import torch.nn as nn
 from .decoder import Decoder
 from .msff import MSFF
@@ -13,8 +17,8 @@ class MemSeg(nn.Module):
 
         f_in_channels = feature_channels[0]
         if use_asff:
-            self.fusion = ASFF()
-            fusion_channels = [f_in_channels, 128, 128, 128]
+            self.fusion = ASFF(out_channels=[64,128,256])
+            fusion_channels = [f_in_channels, 256, 128, 64]
         else:
             self.fusion = MSFF()
             fusion_channels = [f_in_channels, 64, 128, 256]
