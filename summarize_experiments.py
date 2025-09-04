@@ -53,6 +53,17 @@ def _pick_metrics(savedir: str, prefer: str = "best") -> Tuple[str, Dict[str, An
     p = os.path.join(savedir, "metrics_latest.json")
     if prefer in ("latest", "any") and os.path.isfile(p):
         return "latest", _load_json(p), p
+    # NEW: latest_score.json 지원
+    p = os.path.join(savedir, "latest_score.json")
+    if os.path.isfile(p):
+        data = _load_json(p)
+        out = {}
+        for k, v in data.items():
+            if k.startswith("eval_"):
+                out[k.replace("eval_", "")] = v
+            else:
+                out[k] = v
+        return "legacy", out, p
     # 3) legacy best_score.json (기존 포맷)
     p = os.path.join(savedir, "best_score.json")
     if os.path.isfile(p):
@@ -128,16 +139,28 @@ def collect(root: str = "runs", prefer: str = "best") -> List[Dict[str, Any]]:
         rows.append(row)
     return rows
 
-def write_csv(rows: List[Dict[str, Any]], outpath: str) -> None:
+# def write_csv(rows: List[Dict[str, Any]], outpath: str) -> None:
+#     if not rows:
+#         raise SystemExit("No metrics found. Check --root or file names.")
+#     keys = sorted(set().union(*[r.keys() for r in rows]))
+#     os.makedirs(os.path.dirname(outpath) or ".", exist_ok=True)
+#     with open(outpath, "w", newline="") as f:
+#         w = csv.DictWriter(f, fieldnames=keys)
+#         w.writeheader()
+#         for r in rows:
+#             w.writerow(r)
+def write_csv(rows, outpath):
     if not rows:
         raise SystemExit("No metrics found. Check --root or file names.")
     keys = sorted(set().union(*[r.keys() for r in rows]))
+    rows_sorted = sorted(rows, key=lambda r: (r.get("target",""), r.get("fusion",""),
+                                              r.get("selector",""), r.get("seed",""), r.get("rep","")))
     os.makedirs(os.path.dirname(outpath) or ".", exist_ok=True)
     with open(outpath, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys)
         w.writeheader()
-        for r in rows:
-            w.writerow(r)
+        w.writerows(rows_sorted)
+
 
 def group_summary(rows: List[Dict[str, Any]], metrics: List[str]) -> List[Dict[str, Any]]:
     """
