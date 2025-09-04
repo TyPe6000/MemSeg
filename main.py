@@ -267,6 +267,10 @@ if __name__=='__main__':
         cfg.MODEL = {}
     cfg.MODEL['use_asff'] = args['use_asff']
 
+    # TRAIN.use_asff 삭제 (중복 및 혼란 방지, 실제는 MODEL.use_asff 사용)
+    if 'use_asff' in args:
+        del args['use_asff']
+
     # merge config with new keys
     cfg = OmegaConf.merge(cfg, args)
 
