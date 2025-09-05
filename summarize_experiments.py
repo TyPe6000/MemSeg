@@ -79,19 +79,62 @@ def _pick_metrics(savedir: str, prefer: str = "best") -> Tuple[str, Dict[str, An
         return "legacy", out, p
     return "none", {}, ""
 
-def _parse_path_parts(savedir: str) -> Tuple[str,str,str,str,str]:
+def _parse_path_parts(savedir: str) -> Tuple[str, str, str, str, str]:
     """
-    runs/<target>/<fusion>/<selector>/s<seed>/r<rep>
+    어디에 있어도 처리:
+      .../<target>/<fusion>/<selector>/s<seed>/r<rep>/(MemSeg-<target>)?
+      s와 r 경로 기준으로 상위 경로 역추적
+    실패 시 "NA"
     """
     parts = savedir.replace("\\", "/").split("/")
-    # 뒤에서 6개를 기대
-    try:
-        _runs, target, fusion, selector, sseed, rrep = parts[-6:]
-        seed = sseed.lstrip("s")
-        rep  = rrep.lstrip("r")
-    except Exception:
-        target=fusion=selector=seed=rep="NA"
+    target = fusion = selector = seed = rep = "NA"
+
+    # 1) s<seed>/r<rep> 패턴을 '마지막'으로 찾기
+    s_idx = r_idx = -1
+    for i in range(1, len(parts)):
+        if re.fullmatch(r"r\d+", parts[i]) and re.fullmatch(r"s\d+", parts[i-1]):
+            s_idx, r_idx = i-1, i  # 가장 최근(가장 깊은) 매칭을 계속 갱신
+    if s_idx == -1:
+        # seed/rep를 못 찾으면 포기
+        return target, fusion, selector, seed, rep
+
+    seed = parts[s_idx][1:]  # 's123' -> '123'
+    rep  = parts[r_idx][1:]  # 'r1'   -> '1'
+
+    # 2) selector, fusion, target은 s<seed> 앞 3단계
+    #    (... target / fusion / selector / s<seed> / r<rep> / ...)
+    if s_idx - 3 >= 0:
+        selector = parts[s_idx - 1]
+        fusion   = parts[s_idx - 2]
+        target   = parts[s_idx - 3]
+
+    # 3) 보조: r<rep> 뒤에 'MemSeg-<target>' 폴더가 있으면 target 보정
+    #    (... r<rep> / MemSeg-<target> / ...)
+    if r_idx + 1 < len(parts):
+        m = re.fullmatch(r"MemSeg-(.+)", parts[r_idx + 1])
+        if m:
+            target_mem = m.group(1)
+            # target이 비어있거나 보정이 더 신뢰된다면 덮어쓰기
+            if target == "NA" or target_mem != "NA":
+                target = target_mem
+
     return target, fusion, selector, seed, rep
+
+def _parse_patch_exp(savedir: str) -> Tuple[str, str]:
+    """
+    경로 중간의 'v<something>' / 'exp<something>' 세그먼트를 추출.
+    예: runs/v3/exp1/... -> ('v3','exp1')
+    없으면 'NA'
+    """
+    parts = savedir.replace("\\", "/").split("/")
+    patch = "NA"
+    exp = "NA"
+    for p in parts:
+        if re.fullmatch(r"v[\w.-]+", p) and patch == "NA":
+            patch = p
+        if re.fullmatch(r"exp[\w.-]+", p) and exp == "NA":
+            exp = p
+    return patch, exp
 
 def collect(root: str = "runs", prefer: str = "best") -> List[Dict[str, Any]]:
     rows = []
@@ -106,11 +149,13 @@ def collect(root: str = "runs", prefer: str = "best") -> List[Dict[str, Any]]:
             continue
 
         target, fusion, selector, seed, rep = _parse_path_parts(dirpath)
-
+        patch, exp = _parse_patch_exp(dirpath)
         row = {
             "savedir": dirpath,
             "which": which,
             "file": used,
+            "patch": patch,
+            "exp": exp,
             "target": target,
             "fusion": fusion,
             "selector": selector,
@@ -139,22 +184,22 @@ def collect(root: str = "runs", prefer: str = "best") -> List[Dict[str, Any]]:
         rows.append(row)
     return rows
 
-# def write_csv(rows: List[Dict[str, Any]], outpath: str) -> None:
-#     if not rows:
-#         raise SystemExit("No metrics found. Check --root or file names.")
-#     keys = sorted(set().union(*[r.keys() for r in rows]))
-#     os.makedirs(os.path.dirname(outpath) or ".", exist_ok=True)
-#     with open(outpath, "w", newline="") as f:
-#         w = csv.DictWriter(f, fieldnames=keys)
-#         w.writeheader()
-#         for r in rows:
-#             w.writerow(r)
 def write_csv(rows, outpath):
     if not rows:
         raise SystemExit("No metrics found. Check --root or file names.")
     keys = sorted(set().union(*[r.keys() for r in rows]))
-    rows_sorted = sorted(rows, key=lambda r: (r.get("target",""), r.get("fusion",""),
-                                              r.get("selector",""), r.get("seed",""), r.get("rep","")))
+    rows_sorted = sorted(
+        rows,
+        key=lambda r: (
+            r.get("patch",""),
+            r.get("exp",""),
+            r.get("target",""),
+            r.get("fusion",""),
+            r.get("selector",""),
+            r.get("seed",""),
+            r.get("rep",""),
+        )
+    )
     os.makedirs(os.path.dirname(outpath) or ".", exist_ok=True)
     with open(outpath, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=keys)
@@ -171,26 +216,37 @@ def group_summary(rows: List[Dict[str, Any]], metrics: List[str]) -> List[Dict[s
 
     groups = defaultdict(list)
     for r in rows:
-        key = (r.get("target","NA"), r.get("fusion","NA"), r.get("selector","NA"))
+        # 그룹 키: patch/exp/target/fusion/selector
+        key = (
+            r.get("patch", "NA"),
+            r.get("exp", "NA"),
+            r.get("target", "NA"),
+            r.get("fusion", "NA"),
+            r.get("selector", "NA"),
+        )
         groups[key].append(r)
 
+
     out = []
-    for (target, fusion, selector), items in groups.items():
-        row = {"target": target, "fusion": fusion, "selector": selector, "n": len(items)}
+    for (patch, exp, target, fusion, selector), items in groups.items():
+        row = {
+            "patch": patch,
+            "exp": exp,
+            "target": target,
+            "fusion": fusion,
+            "selector": selector,
+            "n": len(items),
+        }
         for m in metrics:
-            vals = []
-            for it in items:
-                if m in it and isinstance(it[m], (int, float)):
-                    vals.append(float(it[m]))
+            vals = [float(it[m]) for it in items if m in it and isinstance(it[m], (int, float))]
             if vals:
                 mean = sum(vals) / len(vals)
-                var  = sum((x-mean)**2 for x in vals) / (len(vals)-1) if len(vals) > 1 else 0.0
-                std  = math.sqrt(var)
+                var = sum((x - mean) ** 2 for x in vals) / (len(vals) - 1) if len(vals) > 1 else 0.0
                 row[f"{m}_mean"] = mean
-                row[f"{m}_std"]  = std
+                row[f"{m}_std"] = var ** 0.5
             else:
                 row[f"{m}_mean"] = ""
-                row[f"{m}_std"]  = ""
+                row[f"{m}_std"] = ""
         out.append(row)
     return out
 
