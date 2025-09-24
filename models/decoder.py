@@ -31,7 +31,7 @@ class Decoder(nn.Module):
                  final_out_channels=2):
         """
         encoder_out_channels: encoder_output의 채널 수 (ex. 512)
-        fusion_channels: [f3, f2, f1, f0]의 채널 수 (ASFF: [128,128,128,128], MSFF: [256,256,256,64] 등)
+        fusion_channels: [f3, f2, f1, f0]의 채널 수
         decoder_channels: 업샘플링 후 각 단계의 출력 채널 수 [up3, up2, up1, up0]
         final_out_channels: 최종 출력 채널 수 (ex. 2)
         """

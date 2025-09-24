@@ -1,3 +1,7 @@
+# data/dataset.py
+# v1 - 2025-08-01, Forked from Memseg
+# v4.0.0 - 2025-09-24, modified to support other texture dataset
+
 import cv2
 import os
 import numpy as np
